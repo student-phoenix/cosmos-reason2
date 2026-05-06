@@ -95,14 +95,15 @@ class CustomDataset(torch.utils.data.Dataset):
                 videos = [os.path.join(self.media_path, vid) for vid in videos]
 
         # cosmos-rl expects base64 encoded images
-        for i, image in enumerate(images):
-            try:
-                images[i] = base64.b64encode(open(image, "rb").read())
-            except (OSError, FileNotFoundError) as e:
-                logger.error(
-                    f"Failed to read image file at sample index {idx}, image index {i}: {e}"
-                )
-                raise
+        if images:
+            for i, image in enumerate(images):
+                try:
+                    images[i] = base64.b64encode(open(image, "rb").read())
+                except (OSError, FileNotFoundError) as e:
+                    logger.error(
+                        f"Failed to read image file at sample index {idx}, image index {i}: {e}"
+                    )
+                    raise
 
         # Remove image and video tags from user prompt
         user_prompt = re.sub(r"(\n)?</?(image|video)>(\n)?", "", user_prompt)
