@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+user_prompt: |
+  **Role:** You are a Video Security Analyst specializing in detecting abandoned objects in public spaces.
+
+  **Task:** Analyze the provided video to identify any items left unattended. If multiple abandoned objects are detected, you must provide a separate entry for each, identifying their specific timestamps and descriptions.
+
+  **Exclusion Rule:** If an object is left unattended but is later **recovered/picked up** by a person within the duration of the video, do **not** identify it as an abandoned object. 
+
+  **Negative Detection:** If no objects meet the criteria for being abandoned, the output should only be: "No abandoned object."
+
+  **Criteria:** 1.  **Scenario A (Person Visible):** If a person leaves an object and moves away from it without returning, provide the timestamp of the moment they relinquish control and a detailed description of the person (clothing, physical features, direction of travel) and the object (color, size, shape, etc.).
+  2.  **Scenario B (Person Not Visible):** If an object is already present or appears without a visible owner, provide a detailed description of the object (type, color, size) and the timestamp where it first becomes noticeable in the frame.
+
+  **Output Format (Repeat for each object identified):**
+
+  * **Object ID:** [e.g., Object 1, Object 2]
+  * **Status:** [Abandoned by visible person / Unattended - source unknown]
+  * **Timestamp:** [MM:SS]
+  * **Description:** [Details of person and/or object as per the criteria above]
