@@ -1,0 +1,56 @@
+[custom.dataset]
+dataset_root = ...  # set as data root
+subdirectories = ["cv_annotated", "human_annotated", "reason1_sft"]
+
+# Sampling weights for each subdirectory (must match order of subdirectories)
+# These weights control the probability of sampling from each dataset.
+# Weights are normalized internally, so [1, 2, 1] is equivalent to [0.25, 0.5, 0.25]
+#
+# Current setting: 30% cv_annotated, 50% human_annotated, 20% reason1_sft
+weights = [0.3, 0.5, 0.2]
+
+meta_file = "meta.json"
+
+[custom.vision]
+# NOTE: Use ONLY nframes OR fps, NOT both (framework limitation)
+min_pixels = 3136                # 56x56 minimum (4 patches)
+max_pixels = 360000              # ~600x600 per frame
+nframes = 16                     # Fixed number of frames for consistent tokenization
+
+[train]
+output_dir = ...  # set as output directory
+resume = true
+compile = false
+epoch = 3                        # 3 epochs
+train_batch_per_replica = 32     # Per-GPU batch size
+optm_lr = 2e-7
+optm_weight_decay = 0.01
+optm_warmup_steps = 0.03
+optm_decay_type = "cosine"
+optm_grad_norm_clip = 1.0
+seed = 42
+
+[policy]
+model_name_or_path = "nvidia/Cosmos-Reason2-8B"
+model_max_length = 4096
+model_gradient_checkpointing = true
+
+[logging]
+logger = ['console', 'wandb']
+project_name = "cosmos_reason2_av_vqa"
+experiment_name = "post_training_uber/av_vqa_sft_blended"
+
+[train.train_policy]
+type = "sft"
+mini_batch = 4
+dataloader_num_workers = 4
+
+[train.ckpt]
+enable_checkpoint = true
+save_freq = 20
+
+[policy.parallelism]
+tp_size = 1
+cp_size = 1
+dp_shard_size = 8
+pp_size = 1
