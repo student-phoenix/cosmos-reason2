@@ -1,0 +1,239 @@
+# =============================================================================
+# CONFIG SFT — Cosmos-Reason2-2B | 2x RTX 6000 ADA (48 Go chacune)
+# Dataset : ~30 vidéos de 1 à 3 minutes
+# Objectif : valider le pipeline end-to-end avant de scaler le dataset
+# =============================================================================
+
+
+# =============================================================================
+# [custom.dataset] — Chemins vers ton dataset
+# =============================================================================
+# annotation_path : fichier JSON contenant les paires (vidéo, question, réponse)
+#                   au format LLaVA (liste de conversations structurées)
+# media_path      : dossier racine où cosmos_rl ira chercher les fichiers vidéo
+#                   référencés dans le JSON ci-dessus
+#
+# Les clés "weights" et "meta_file" sont laissées commentées car tu n'as qu'un
+# seul sous-dossier. Elles deviennent utiles si tu mélanges plusieurs sources
+# de données avec des probabilités d'échantillonnage différentes.
+# =============================================================================
+
+[custom.dataset]
+annotation_path = "/jan/dataset/pai_garden/ground_truth_llava.json"
+media_path      = "/jan/dataset/pai_garden"
+
+# Exemple pour plus tard, quand tu auras plusieurs sous-datasets :
+# weights = [0.3, 0.5, 0.2]   # 30% source A, 50% source B, 20% source C
+
+
+# =============================================================================
+# [custom.vision] — Paramètres de prétraitement visuel des vidéos
+# =============================================================================
+# Le modèle Cosmos encode chaque frame en patches visuels (tokens).
+# Plus max_pixels est élevé, plus chaque frame produit de tokens, et plus
+# la mémoire GPU explose.
+#
+# CALCUL :
+#   tokens/frame ≈ max_pixels / ~800
+#   → 360 000 px → ~450 tokens/frame  (valeur d'origine, trop élevée)
+#   → 200 704 px → ~250 tokens/frame  (valeur ajustée, ~448×448)
+#
+# fps = 0.5 → 1 frame toutes les 2 secondes
+#   Vidéo de 3 min → 90 frames × 250 tokens = ~22 500 tokens visuels
+#   C'est encore long, mais model_max_length = 8192 tronquera proprement.
+#   Pour un test de pipeline, c'est suffisant.
+#
+# ⚠️  N'utilise JAMAIS fps ET nframes en même temps (limitation du framework).
+# =============================================================================
+
+[custom.vision]
+min_pixels = 3136       # Résolution minimale : 56×56 px (4 patches) — inchangé
+max_pixels = 200704     # Résolution maximale par frame : ~448×448 px
+                        # Réduit de 360 000 → 200 704 pour limiter les tokens
+                        # et éviter les OOM sur 48 Go de VRAM
+fps = 0.5               # 1 frame toutes les 2 secondes (était 1 frame/s)
+                        # Divise par 2 le nombre de frames → divise par 2
+                        # la mémoire et le temps de forward pass
+
+
+# =============================================================================
+# [policy] — Modèle de base et contraintes de séquence
+# =============================================================================
+# model_name_or_path : identifiant HuggingFace du modèle à fine-tuner
+#
+# model_max_length   : longueur maximale de la séquence totale (tokens visuels
+#                      + tokens texte prompt + tokens réponse).
+#                      Augmenté de 4 096 → 8 192 pour absorber plus de frames
+#                      sans tronquer trop brutalement.
+#                      Faisable sur 48 Go avec gradient_checkpointing + LoRA.
+#
+# model_gradient_checkpointing : recompute les activations au lieu de les
+#                      stocker → divise ~3× l'empreinte mémoire des activations
+#                      au prix d'un surcoût calcul (~20%). Indispensable ici.
+# =============================================================================
+
+[policy]
+model_name_or_path          = "nvidia/Cosmos-Reason2-2B"
+model_max_length            = 8192    # Augmenté (était 4 096)
+                                      # Permet d'absorber plus de frames vidéo
+model_gradient_checkpointing = true   # Indispensable pour tenir en VRAM
+
+
+# =============================================================================
+# [policy.lora] — Fine-tuning efficace avec LoRA (Low-Rank Adaptation)
+# =============================================================================
+# LoRA n'entraîne pas tous les poids du modèle : il injecte de petites matrices
+# de faible rang (r) en parallèle des couches linéaires existantes.
+#
+# Avantages clés pour ton cas :
+#   • Mémoire réduite : ~4× moins de paramètres entraînables vs full fine-tuning
+#   • Meilleure généralisation sur petit dataset (30 vidéos)
+#   • Batch size plus élevé possible → stabilité d'entraînement
+#   • Le modèle de base reste intact (les poids LoRA sont dans un fichier séparé)
+#
+# r = 16           : rang des matrices LoRA. Plus r est grand, plus le modèle
+#                    peut s'adapter, mais plus il consomme de mémoire.
+#                    r=16 est un bon compromis pour un modèle 2B.
+# lora_alpha = 16  : facteur d'échelle. Garder alpha = r est une bonne pratique
+#                    de départ (scaling factor = alpha/r = 1.0).
+# lora_dropout     : régularisation légère, utile avec un petit dataset.
+# target_modules   : applique LoRA à toutes les couches linéaires du modèle.
+# =============================================================================
+
+[policy.lora]
+r                = 16
+lora_alpha       = 16.0
+lora_dropout     = 0.05
+target_modules   = "all-linear"
+use_rslora       = false          # Rank-Stabilized LoRA, non nécessaire ici
+init_lora_weights = true          # Initialisation standard (stable)
+
+
+# =============================================================================
+# [policy.parallelism] — Répartition du modèle sur tes 2 GPUs
+# =============================================================================
+# Il existe plusieurs stratégies de parallélisme :
+#   • tp_size (Tensor Parallel)   : découpe chaque couche sur N GPUs
+#   • pp_size (Pipeline Parallel) : découpe les couches en étages
+#   • dp_shard_size (Data Parallel Sharded / FSDP) : chaque GPU traite des
+#     batches différents ET partage les paramètres entre tous les GPUs
+#   • cp_size (Context Parallel)  : découpe les séquences longues
+#
+# Pour 2 GPUs avec un modèle 2B :
+#   → dp_shard_size = 2 est la stratégie optimale.
+#     Les paramètres sont shardés entre les 2 GPUs (ZeRO / FSDP),
+#     chaque GPU traite son propre mini-batch en parallèle.
+#   → tp_size = 1 : pas de tensor parallelism (communication trop coûteuse
+#     pour 2 GPUs seulement, surtout sur un modèle 2B)
+# =============================================================================
+
+[policy.parallelism]
+tp_size      = 1   # Pas de tensor parallelism — correct pour 2 GPUs
+cp_size      = 1   # Pas de context parallelism
+dp_shard_size = 2  # FSDP : shard les paramètres sur tes 2 GPUs ✓
+pp_size      = 1   # Pas de pipeline parallelism
+
+
+# =============================================================================
+# [train] — Hyperparamètres d'entraînement
+# =============================================================================
+# output_dir   : dossier de sortie pour les checkpoints et logs
+# resume       : reprend depuis le dernier checkpoint si le job est interrompu
+# compile      : active torch.compile() pour optimiser le graphe de calcul.
+#                Désactivé ici car il allonge le premier step et peut bugger
+#                avec certaines versions de PyTorch/CUDA.
+#
+# epoch = 3    : avec 30 vidéos et batch_per_replica=2, on a :
+#                30 / (2 × 2 GPUs) = ~8 steps/epoch → ~24 steps au total
+#                C'est peu, mais suffisant pour valider le pipeline.
+#
+# train_batch_per_replica = 2
+#   Réduit de 4 → 2 pour éviter les OOM avec les vidéos multi-frames.
+#   Si tu ne vois aucun OOM après les premiers steps, tu peux remonter à 4.
+#
+# optm_lr = 2e-5
+#   Augmenté de 2e-7 → 2e-5 : la valeur d'origine était trop basse pour
+#   voir une convergence en seulement ~24 steps sur un petit dataset.
+#   2e-5 est classique pour un SFT avec LoRA sur modèle de 2B paramètres.
+#
+# optm_warmup_steps = 0.03
+#   3% des steps totaux serviront de warmup linéaire du LR (≈1 step ici).
+#   Évite un pic de gradient instable au tout début de l'entraînement.
+#
+# optm_decay_type = "cosine"
+#   Le LR décroît en cosinus après le warmup → convergence plus douce.
+#
+# optm_grad_norm_clip = 1.0
+#   Clip les gradients si leur norme dépasse 1.0, ce qui évite les
+#   explosions de gradient. Valeur standard, à conserver.
+#
+# seed = 42
+#   Fixe la graine aléatoire pour la reproductibilité des expériences.
+# =============================================================================
+
+[train]
+output_dir              = "outputs/nvidia_uber_cosmos_sft_fumseck"
+resume                  = true
+compile                 = false
+epoch                   = 3
+train_batch_per_replica = 2      # Réduit de 4 → 2 (prudence OOM avec vidéos)
+                                 # Remonter à 4 si pas d'OOM après 2-3 steps
+optm_lr                 = 2e-5   # Augmenté de 2e-7 → 2e-5 (SFT + LoRA + petit dataset)
+optm_weight_decay       = 0.01
+optm_warmup_steps       = 0.03
+optm_decay_type         = "cosine"
+optm_grad_norm_clip     = 1.0
+seed                    = 42
+
+
+# =============================================================================
+# [train.train_policy] — Type de tâche d'entraînement
+# =============================================================================
+# type = "sft" : Supervised Fine-Tuning — le modèle apprend à reproduire
+#                exactement les réponses de ton dataset (teacher forcing).
+#                C'est le mode adapté à ton cas (pas de RLHF ni DPO ici).
+#
+# mini_batch   : taille du mini-batch utilisé dans la boucle de gradient.
+#                Garder à 4 (accumulation de gradient implicite si batch < 4).
+#
+# dataloader_num_workers : nombre de processus CPU pour charger les données
+#                en parallèle. 4 est raisonnable pour un serveur standard.
+# =============================================================================
+
+[train.train_policy]
+type                  = "sft"
+mini_batch            = 2
+dataloader_num_workers = 4
+
+
+# =============================================================================
+# [train.ckpt] — Sauvegarde des checkpoints
+# =============================================================================
+# enable_checkpoint = true : active la sauvegarde des checkpoints
+#
+# save_freq = 20 : sauvegarde toutes les 20 steps.
+#                  Avec ~24 steps au total, tu auras 1 checkpoint intermédiaire
+#                  (step 20) + le checkpoint final (step 24). C'est bien calibré
+#                  pour ton volume d'entraînement.
+# =============================================================================
+
+[train.ckpt]
+enable_checkpoint = true
+save_freq         = 20
+
+
+# =============================================================================
+# [logging] — Suivi de l'entraînement
+# =============================================================================
+# logger = ['console', 'wandb'] : logs affichés dans le terminal ET envoyés
+#                                 sur Weights & Biases pour visualisation.
+#
+# project_name    : nom du projet dans ton espace W&B
+# experiment_name : nom de la run spécifique (chemin hiérarchique conseillé
+#                   pour organiser tes expériences dans W&B)
+# =============================================================================
+
+[logging]
+logger          = ['console', 'wandb']
+project_name    = "cosmos_reason2_2B_test_uber_sft"
+experiment_name = "post_training_uber/cosmos_reason2_2B_test_uber_sft_fumseck"
