@@ -1,0 +1,67 @@
+[custom.dataset]
+annotation_path = "/jan/dataset/pai_garden/ground_truth_llava.json"
+media_path = "/jan/dataset/pai_garden"
+
+# Sampling weights for each subdirectory (must match order of subdirectories)
+# These weights control the probability of sampling from each dataset.
+# Weights are normalized internally, so [1, 2, 1] is equivalent to [0.25, 0.5, 0.25]
+#
+# Current setting: 30% cv_annotated, 50% human_annotated, 20% reason1_sft
+# weights = [0.3, 0.5, 0.2]
+
+# meta_file = "meta.json"
+
+[custom.vision]
+# NOTE: Use ONLY nframes OR fps, NOT both (framework limitation)
+min_pixels = 3136                # 56x56 minimum (4 patches)
+max_pixels = 360000              # ~600x600 per frame
+fps = 1                          # Sample 1 frame per second for video inputs
+
+[train]
+output_dir = "outputs/nvidia_uber_cosmos_sft"
+resume = true
+compile = false
+epoch = 3                        # 3 epochs
+train_batch_per_replica = 4     # Per-GPU batch size
+optm_lr = 2e-7
+optm_weight_decay = 0.01
+optm_warmup_steps = 0.03
+optm_decay_type = "cosine"
+optm_grad_norm_clip = 1.0
+seed = 42
+
+[policy]
+model_name_or_path = "nvidia/Cosmos-Reason2-2B"
+model_max_length = 4096
+model_gradient_checkpointing = true
+
+[policy.lora]
+r = 8                          # LoRA rank (default: 8)
+lora_alpha = 8.0               # LoRA alpha (default: 8.0)
+lora_dropout = 0.0             # Dropout (default: 0.0)
+target_modules = "all-linear"  # or a list like ["q_proj", "v_proj"]
+use_rslora = false             # Rank-stabilized LoRA
+# init_lora_weights = true     # true, false, "gaussian", "eva", "olora", "pissa"
+# modules_to_save = []         # Non-LoRA modules to keep trainable
+# alpha_pattern = {}           # Per-module lora_alpha overrides (regex keys)
+# r_pattern = {}               # Per-module rank overrides (regex keys)
+
+[logging]
+logger = ['console', 'wandb']
+project_name = "cosmos_reason2_2B_test_uber_sft"
+experiment_name = "post_training_uber/cosmos_reason2_2B_test_uber_sft"
+
+[train.train_policy]
+type = "sft"
+mini_batch = 4
+dataloader_num_workers = 4
+
+[train.ckpt]
+enable_checkpoint = true
+save_freq = 20
+
+[policy.parallelism]
+tp_size = 1
+cp_size = 1
+dp_shard_size = 2
+pp_size = 1
