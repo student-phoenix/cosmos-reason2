@@ -338,8 +338,6 @@ def quantize(args: Args):
             sequential_targets=sequential_targets,
         )
     print("Quantization complete!")
-    print("Running sample generation...")
-    run_sample_generation(model, processor, args.max_sequence_length)
     print(f"Saving quantized model to: {output_dir}...")
     save_model(model, processor, output_dir)
     config_path = output_dir / "config.json"
@@ -354,6 +352,8 @@ def quantize(args: Args):
         dirs_exist_ok=True,
     )
     print(f"Quantization complete! Model saved to: {output_dir}")
+    print("Running sample generation...")
+    run_sample_generation(model, processor, args.max_sequence_length)
 
 
 def main():
