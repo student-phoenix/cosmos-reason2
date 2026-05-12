@@ -6,11 +6,13 @@ Usage:
         --adapter_path outputs/nvidia_uber_cosmos_sft_fumseck/20260507155513/safetensors/step_21 \
         --output_path merged_model \
         [--base_model nvidia/Cosmos-Reason2-2B] \
-        [--dtype bfloat16]
+        [--dtype float16]
 """
 
 import argparse
 import json
+import shutil
+import tempfile
 from pathlib import Path
 
 import torch
@@ -41,7 +43,7 @@ def parse_args():
     parser.add_argument(
         "--dtype",
         type=str,
-        default="bfloat16",
+        default="float16",
         choices=["bfloat16", "float16", "float32"],
         help="Dtype to load and save the model in (default: bfloat16)",
     )
@@ -81,8 +83,20 @@ def main():
         trust_remote_code=True,
     )
 
+    # PEFT 0.18.0 crashes if alpha_pattern/rank_pattern are None (calls .keys() unconditionally).
+    # Patch null pattern dicts to {} and load from a temp dir to avoid modifying the saved adapter.
+    for key in ("alpha_pattern", "rank_pattern", "r_pattern"):
+        if adapter_config.get(key) is None:
+            adapter_config[key] = {}
+
     print("Loading LoRA adapter...")
-    model = PeftModel.from_pretrained(model, str(adapter_path))
+    with tempfile.TemporaryDirectory() as _tmp:
+        tmp = Path(_tmp)
+        for f in adapter_path.iterdir():
+            if f.name != "adapter_config.json":
+                shutil.copy2(f, tmp / f.name)
+        (tmp / "adapter_config.json").write_text(json.dumps(adapter_config, indent=2))
+        model = PeftModel.from_pretrained(model, str(tmp))
 
     print("Merging weights...")
     model = model.merge_and_unload()
