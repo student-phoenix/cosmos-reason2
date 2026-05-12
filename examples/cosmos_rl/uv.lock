@@ -1096,12 +1096,16 @@ dependencies = [
     { name = "cosmos-reason2-utils", extra = ["cosmos-rl"] },
     { name = "cosmos-reason2-utils", extra = ["cu128-torch28"], marker = "extra == 'extra-20-cosmos-reason2-utils-cu128-torch28' or (extra == 'extra-20-cosmos-reason2-utils-cu128-torch29' and extra == 'extra-20-cosmos-reason2-utils-cu130-torch29')" },
     { name = "peft" },
+    { name = "pillow" },
+    { name = "requests" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "cosmos-reason2-utils", extras = ["cosmos-rl", "cu128-torch28"], editable = "../../cosmos_reason2_utils" },
     { name = "peft", specifier = ">=0.18.0" },
+    { name = "pillow", specifier = ">=2.2.1" },
+    { name = "requests" },
 ]
 
 [[package]]

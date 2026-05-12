@@ -13,9 +13,12 @@ import argparse
 import json
 import shutil
 import tempfile
+from io import BytesIO
 from pathlib import Path
 
+import requests
 import torch
+from PIL import Image
 from peft import PeftModel
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 
@@ -49,6 +52,52 @@ def parse_args():
     )
     return parser.parse_args()
 
+def run_sample_generation(
+    model: Qwen3VLForConditionalGeneration,
+    processor: AutoProcessor,
+    max_sequence_length: int = 2048,
+):
+    print("========== SAMPLE GENERATION ==============")
+    test_url = "http://images.cocodataset.org/train2017/000000231895.jpg"
+    test_image = Image.open(BytesIO(requests.get(test_url).content))
+
+    test_messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": test_url},
+                {"type": "text", "text": "Please describe the animal in this image\n"},
+            ],
+        }
+    ]
+
+    prompt = processor.apply_chat_template(test_messages, add_generation_prompt=True)
+    inputs = processor(
+        text=[prompt],
+        images=[test_image],
+        padding=False,
+        max_length=max_sequence_length,
+        truncation=True,
+        return_tensors="pt",
+    ).to("cuda")
+
+    print("Generating response...")
+    output = model.generate(**inputs, max_new_tokens=200, temperature=0.7)
+    generated_text = processor.decode(output[0], skip_special_tokens=True)
+    print(f"Generated: {generated_text}")
+    print("==========================================")
+
+
+def check_weights_merged(base_model, merged_model):
+    diffs = {}
+    for name, param in base_model.named_parameters():
+        merged_param = dict(merged_model.named_parameters())[name]
+        diff = (param - merged_param.to(param.device)).abs().max().item()
+        if diff > 0:
+            diffs[name] = diff
+
+    print(f"{len(diffs)} layers modified out of {len(list(base_model.named_parameters()))}")
+    
 
 def main():
     args = parse_args()
@@ -109,6 +158,18 @@ def main():
     print("Saving processor/tokenizer...")
     processor = AutoProcessor.from_pretrained(str(adapter_path), trust_remote_code=True)
     processor.save_pretrained(str(output_path))
+
+    print("Verifying merged weights...")
+    base_model = Qwen3VLForConditionalGeneration.from_pretrained(
+        base_model_id,
+        torch_dtype=torch_dtype,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    check_weights_merged(base_model, model)
+
+    print("\nRunning sample generation to verify the merged model...")
+    run_sample_generation(model, processor)
 
     print(f"\nDone. Merged model saved to: {output_path}")
 

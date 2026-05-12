@@ -21,6 +21,8 @@ requires-python = ">=3.10"
 dependencies = [
     "cosmos-reason2-utils[cosmos-rl,cu128_torch28]",
     "peft>=0.18.0",
+    "pillow>=2.2.1",
+    "requests",
 ]
 
 [tool.uv.sources]
