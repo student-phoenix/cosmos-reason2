@@ -12,6 +12,7 @@ Usage:
 import argparse
 import json
 import shutil
+import sys
 import tempfile
 from io import BytesIO
 from pathlib import Path
@@ -21,6 +22,19 @@ import torch
 from PIL import Image
 from peft import PeftModel
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
+
+
+class _Tee:
+    def __init__(self, *files):
+        self._files = files
+
+    def write(self, data):
+        for f in self._files:
+            f.write(data)
+
+    def flush(self):
+        for f in self._files:
+            f.flush()
 
 
 def parse_args():
@@ -152,26 +166,34 @@ def main():
 
     output_path.mkdir(parents=True, exist_ok=True)
 
-    print(f"Saving merged model to {output_path} ...")
-    model.save_pretrained(str(output_path), safe_serialization=True)
+    log_path = output_path / "merge_log.txt"
+    log_file = open(log_path, "w")
+    sys.stdout = _Tee(sys.__stdout__, log_file)
+    try:
+        print(f"Saving merged model to {output_path} ...")
+        model.save_pretrained(str(output_path), safe_serialization=True)
 
-    print("Saving processor/tokenizer...")
-    processor = AutoProcessor.from_pretrained(str(adapter_path), trust_remote_code=True)
-    processor.save_pretrained(str(output_path))
+        print("Saving processor/tokenizer...")
+        processor = AutoProcessor.from_pretrained(str(adapter_path), trust_remote_code=True)
+        processor.save_pretrained(str(output_path))
 
-    print("Verifying merged weights...")
-    base_model = Qwen3VLForConditionalGeneration.from_pretrained(
-        base_model_id,
-        torch_dtype=torch_dtype,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    check_weights_merged(base_model, model)
+        print("Verifying merged weights...")
+        base_model = Qwen3VLForConditionalGeneration.from_pretrained(
+            base_model_id,
+            torch_dtype=torch_dtype,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+        check_weights_merged(base_model, model)
 
-    print("\nRunning sample generation to verify the merged model...")
-    run_sample_generation(model, processor)
+        print("\nRunning sample generation to verify the merged model...")
+        run_sample_generation(model, processor)
 
-    print(f"\nDone. Merged model saved to: {output_path}")
+        print(f"\nDone. Merged model saved to: {output_path}")
+    finally:
+        sys.stdout = sys.__stdout__
+        log_file.close()
+        print(f"Logs saved to: {log_path}")
 
 
 if __name__ == "__main__":
