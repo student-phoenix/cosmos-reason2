@@ -20,6 +20,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "cosmos-reason2-utils[cosmos-rl,cu128_torch28]",
+    "peft>=0.18.0",
 ]
 
 [tool.uv.sources]
